@@ -1,6 +1,6 @@
-README – Replication Package for “Multilingual LLM Reliability on Health Claims”
+README – Replication Package for “Artificial Intelligence health advice accuracy varies across languages and contexts”
 
-This directory contains all code and data needed to reproduce our analyses.
+This directory contains all code needed to reproduce our analyses. For full package, including data, visit the Zenodo repository
 
 Files:
   • project.Rproj  
@@ -11,9 +11,9 @@ Files:
   • 5_evaluate_pubhealth_predictions.Rmd  
 
 Directories:
-  • data/       – Raw input files  
-  • int_data/   – Processed and intermediary data  
-  • figures/    – Final figures used in main text  
+  • data/       – Raw input files  (missing in GitHub version)
+  • int_data/   – Processed and intermediary data  (missing in GitHub version)
+  • figures/    – Final figures used in main text  (missing in GitHub version)
 
 Purpose of each file:
 1_translate_health_claims.ipynb  
