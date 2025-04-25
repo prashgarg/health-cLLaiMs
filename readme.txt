@@ -1,6 +1,6 @@
 README – Replication Package for “Artificial Intelligence health advice accuracy varies across languages and contexts”
 
-This directory contains all code needed to reproduce our analyses. For full package, including data, visit the Zenodo repository
+This directory contains all code needed to reproduce our analyses. For full package, including data, visit the Zenodo repository (DOI: 10.5281/zenodo.15281282), accessible at https://zenodo.org/records/15281282.
 
 Files:
   • project.Rproj  
