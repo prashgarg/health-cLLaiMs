@@ -1,0 +1,319 @@
+---
+title: "5_gephi_bec"
+author: "Prashant Garg"
+date: "2024-06-06"
+output: html_document
+---
+
+#init
+```{r}
+library(data.table)
+library(magrittr)
+library(jsonlite)
+library(tidyverse)
+library(ggrepel)
+library(jsonlite)
+```
+
+# data
+
+metadata
+```{r}
+con <- file("int_data/PUBHEALTH_processed_health_claims.json", "r")
+df <- stream_in(con, flatten = TRUE)
+close(con)
+
+```
+
+responses
+```{r}
+# Load required packages
+library(jsonlite)
+
+# 1. List all JSON files in the folder that start with "responses_"
+json_files <- list.files(
+  path = "int_data/responses_PUBHEALTH/",
+  pattern = "^responses.*\\.json$",
+  full.names = TRUE
+)
+
+# 2. Read each JSON into a data frame
+dfs <- lapply(json_files, function(file) {
+  # Assumes each JSON file is an array of records (list of objects)
+  fromJSON(file, flatten = TRUE)
+})
+
+# 3. Combine all data frames into one
+df_llm <- bind_rows(dfs)
+rm(dfs)
+```
+
+
+```{r}
+setDT(df_llm)
+# 1. Split off the model and iteration (by “__”)
+df_llm[, c("prefix", "model", "iteration") := tstrsplit(custom_id, "__", fixed = TRUE)]
+
+# 2. Split the prefix into the “claim” literal, claim_id, and language (by “_”)
+df_llm[, c("dummy", "claim_id") := tstrsplit(prefix, "_", fixed = TRUE)]
+
+# 3. Clean up helper columns and convert iteration to integer
+df_llm[, `:=`(
+  prefix = NULL,
+  dummy = NULL,
+  iteration = as.integer(iteration)
+)]
+```
+
+clean output
+```{r}
+df_llm %<>% rename(response_raw=response)
+
+
+df_llm[, response := {
+  # Helper: for a single string, extract all '0' or '1' characters and return the last as integer
+  extract_last01 <- function(txt) {
+    # find all matches of the characters '0' or '1'
+    matches <- regmatches(txt, gregexpr("[01]", txt))[[1]]
+    if (length(matches) > 0) {
+      return(as.integer(tail(matches, 1)))
+    } else {
+      return(NA_integer_)
+    }
+  }
+  # Vectorise over the column
+  vapply(response_raw, extract_last01, integer(1))
+}]
+
+# Check the distribution
+a<-df_llm[, .N, by = response][order(response)]
+
+df_llm[,response:=ifelse(response>1,NA,response)]
+```
+
+join metadata
+```{r}
+df_llm %<>% left_join(df, by="claim_id")
+```
+
+# evaluation
+```{r}
+setDT(df_llm)
+
+# 1) (Re)create the binary truth
+df_llm[ , true_label := fifelse(
+     label == "true",  1L,
+fifelse(label == "false", 0L, NA_integer_)
+)]
+
+# 2) Keep only the definitive cases
+eval_dt <- df_llm[!is.na(true_label) & !is.na(response)]
+
+#  Metrics on the “modal” prediction per claim_id & model
+#    (i.e. take the most common response across the 3 runs)
+
+# a) collapse to one row per (model, claim_id) with modal_response
+modal_dt <- eval_dt[ , {
+    tb <- table(response)
+    modal_resp <- as.integer(names(tb)[which.max(tb)])
+    .(modal_response = modal_resp,
+      true_label    = unique(true_label))  # same for all iterations
+}, by = .(model, claim_id)]
+
+# b) compute confusion counts by model
+metrics_modal <- modal_dt[ , .(
+  TP = sum(modal_response == 1L & true_label == 1L),
+  TN = sum(modal_response == 0L & true_label == 0L),
+  FP = sum(modal_response == 1L & true_label == 0L),
+  FN = sum(modal_response == 0L & true_label == 1L)
+), by = model]
+
+metrics_modal[ , c("precision","recall","f1","accuracy") := {
+    prec <- TP / (TP + FP)
+    rec  <- TP / (TP + FN)
+    acc  <- (TP + TN) / (TP + TN + FP + FN)
+    f1v  <- 2 * prec * rec / (prec + rec)
+    list(prec, rec, f1v, acc)
+} ]
+
+# ——————————————————————
+# All
+# ——————————————————————
+All_df <- metrics_modal %>%
+  mutate(
+    model_clean = model %>%
+      str_remove_all("-\\d{4}-\\d{2}-\\d{2}") %>%
+      str_remove_all(":latest"),
+    category    = "All",
+    accuracy    = accuracy
+  ) %>%
+  select(model_clean, category, accuracy)
+
+# ——————————————————————
+# Topics
+# ——————————————————————
+# Re‐create & recode your subjects
+claim_meta2 <- eval_dt %>%
+  distinct(claim_id, subjects) %>%
+  separate_rows(subjects, sep = ",\\s*") %>%
+  mutate(
+    subject = tolower(str_trim(subjects)),
+    subject = case_when(
+      str_detect(subject, regex("covid|coronavirus|virus outbreak|epidemic|flu|measles|ebola")) ~ "covid-19",
+      str_detect(subject, regex("news"))    ~ "news",
+      str_detect(subject, regex("health|healthcare|health care")) ~ "health",
+      str_detect(subject, regex("politics")) ~ "politics",
+      str_detect(subject, regex("abortion")) ~ "abortion",
+      TRUE ~ subject
+    )
+  ) %>%
+  filter(subject %in% c("abortion","health","politics","news","covid-19"))
+
+# Modal predictions per claim
+modal_pred <- eval_dt %>%
+  filter(!is.na(true_label)) %>%
+  group_by(model, claim_id) %>%
+  summarize(
+    modal_response = as.integer(names(which.max(table(response)))),
+    true_label     = first(true_label),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    model_clean = model %>%
+      str_remove_all("-\\d{4}-\\d{2}-\\d{2}") %>%
+      str_remove_all(":latest")
+  )
+
+# Join + compute topic accuracy
+topic_df <- modal_pred %>%
+  inner_join(claim_meta2, by = "claim_id") %>%
+  group_by(model_clean, subject) %>%
+  summarize(
+    accuracy = mean(modal_response == true_label),
+    .groups = "drop"
+  ) %>%
+  rename(category = subject)   # ← critical!
+
+# ——————————————————————
+# Sources
+# ——————————————————————
+
+# 1. Extract top‐level domains from the comma‐separated `sources` URLs
+domains_df <- eval_dt %>%
+  select(claim_id, sources) %>%
+  distinct() %>%
+  separate_rows(sources, sep = ",\\s*") %>%
+  filter(!is.na(sources), sources != "") %>%
+  mutate(
+    # strip protocol + “www.”, then grab up to first slash
+    domain = sources %>%
+      str_remove("^https?://") %>%
+      str_remove("^www\\.") %>%
+      str_extract("^[^/]+")
+  )
+
+# 2. Instead of auto-counting, manually specify your domains of interest:
+top10_domains <- c(
+  "nature.com","foxnews.com","nytimes.com","youtube.com","cdc.gov"
+)
+
+# 3. Compute each model’s modal prediction per claim_id
+modal_pred <- eval_dt %>%
+  filter(!is.na(true_label)) %>%        # only keep rows with a true_label
+  group_by(model, claim_id) %>%
+  summarize(
+    modal_response = as.integer(names(which.max(table(response)))),
+    true_label     = first(true_label),
+    .groups = "drop"
+  )
+
+# 4. Join in only the top‐10 domains
+modal_domains <- modal_pred %>%
+  inner_join(
+    domains_df %>% filter(domain %in% top10_domains),
+    by = "claim_id"
+  )
+
+# 5. Clean up model names for display
+modal_domains <- modal_domains %>%
+  mutate(
+    model_clean = model %>%
+      str_remove_all("-\\d{4}-\\d{2}-\\d{2}") %>%
+      str_remove_all(":latest")
+  )
+
+# 6. Compute modal accuracy by model × domain
+domain_metrics <- modal_domains %>%
+  group_by(model_clean, domain) %>%
+  summarize(
+    accuracy = mean(modal_response == true_label),
+    .groups = "drop"
+  )
+
+source_df <- domain_metrics %>%
+  filter(domain %in% c("nature.com","foxnews.com","nytimes.com","youtube.com","cdc.gov")) %>%
+  rename(
+    category    = domain
+  ) %>%
+  select(model_clean, category, accuracy)
+
+# ——————————————————————
+# Bind & Plot
+# ——————————————————————
+heatmap_df <- bind_rows(All_df, topic_df, source_df) %>%
+  mutate(
+    category = factor(
+      category,
+      levels = c(
+        "All",
+        "abortion","health","politics","news","covid-19",
+        "nature.com","foxnews.com","nytimes.com","youtube.com","cdc.gov"
+      )
+    ),
+    inaccuracy = 1 - accuracy
+  ) %>%
+  # reorder both axes by mean inaccuracy
+  mutate(
+    category    = fct_reorder(category,    inaccuracy, .fun = mean, .desc = FALSE),
+    model_clean = fct_reorder(model_clean, inaccuracy, .fun = mean, .desc = FALSE)
+  )
+
+
+heatmap_inacc <- heatmap_df %>%
+  mutate(
+    inaccuracy   = 1 - accuracy,
+    panel        = case_when(
+      category == "All"                                                      ~ "All",
+      category %in% c("abortion","health","politics","news","covid-19")           ~ "Topics",
+      category %in% c("nature.com","foxnews.com","nytimes.com","youtube.com","cdc.gov") ~ "Sources",
+      TRUE                                                                       ~ NA_character_
+    ),
+    model_clean = str_replace_all(model_clean,
+                                  "gemini-2\\.0-flash-lite", "gemini-2-flash")
+  ) %>%
+  group_by(model_clean) %>%
+  mutate(global_inacc = mean(inaccuracy, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(model_clean = fct_reorder(model_clean, global_inacc, .desc = FALSE)) %>%
+  group_by(panel) %>%
+  mutate(category = fct_reorder(category, inaccuracy, .desc = TRUE)) %>%
+  ungroup()
+
+ggplot(heatmap_inacc, aes(x = category, y = model_clean, fill = inaccuracy)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "indianred", name = "Inaccuracy") +
+  facet_grid(. ~ panel, scales = "free_x", space = "free_x") +
+  labs(x = "Categories (most inaccurate →)", y = "Model (most inaccurate →)") +
+  theme_classic(base_size = 20) +
+  theme(
+    strip.text        = element_text(face = "bold"),
+    panel.spacing.x   = unit(0.5, "lines"),
+    axis.text.x       = element_text(angle = 45, hjust = 1),
+    # axis.text.y       = element_text(size = 10)
+  )
+
+ggsave(plot=last_plot(), filename="figures/fig2.jpg",width = 12,height = 8,dpi=300)
+ggsave(plot=last_plot(), filename="figures/fig2.pdf",width = 12,height = 8,dpi=300)
+
+```
+
