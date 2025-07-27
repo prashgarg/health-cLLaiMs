@@ -15,47 +15,112 @@ library(ggrepel)
 ```
 
 # data
+
 ## 1. linguistic distance data
 
-Full levenshteinLanguageDistances.csv is 800mb and easily available from ASJP's official website
+Full SYNTACTIC.csv is 436mb and easily available from https://github.com/antonisa/lang2vec
 Here, we have provided the intermediary data that goes through the commented out selection of steps.
 The steps ensure we have dyadic English-other language distance pairs.
 ```{r}
-# dfL <- read_csv("data/ASJP/levenshteinLanguageDistances.csv")
-# dfL %<>% filter(language1=="ENGLISH"|language2=="ENGLISH")
+# --------------------------------------------------------------
+# Construct English‑to‑target syntactic distances for Figure 1
+# --------------------------------------------------------------
+
+# # --------------------------------------------------------------
+# # 0.  File locations  <<—–  EDIT if your folder structure differs
+# # --------------------------------------------------------------
+# uriel_folder <- "data/lang2vec"
+# out_file     <- "data/lang2vec/processed_syntactic_English_vs_targets"
 # 
-# # Define your 21 targets
-# targets <- c(
-#   "English","Spanish","Russian","STANDARD_GERMAN","French",
-#   "Japanese","Portuguese","Turkish","Italian","Persian",
-#   "Dutch","Polish","MIDDLE_CHINESE","Vietnamese","Indonesian",
-#   "Czech","Korean","Ukrainian","STANDARD_ARABIC","Greek","Hindi"
+# # --------------------------------------------------------------
+# # 1.  Target languages (pretty names and ISO‑639‑3 codes)
+# # --------------------------------------------------------------
+# targets_iso <- c(
+#   "eng","spa","rus","deu","fra","jpn","por","tur","ita","pes",
+#   "nld","pol","ltc","vie","ind","ces","kor","ukr","arb","ell","hin"
 # )
-# targets<-toupper(targets)
 # 
-# # 3. Filter: English on one side, target language on the other
-# dfL_filt <- dfL %>%
-#   filter(
-#     (language1 == "ENGLISH" & language2 %in% targets) |
-#     (language2 == "ENGLISH" & language1 %in% targets)
-#   )
+# pretty_names <- c(
+#   "English","Spanish","Russian","German","French",
+#   "Japanese","Portuguese","Turkish","Italian","Persian",
+#   "Dutch","Polish","Chinese","Vietnamese","Indonesian",
+#   "Czech","Korean","Ukrainian","Arabic","Greek","Hindi"
+# )
 # 
-# # 4. Extract the non‑English side for each row
-# obtained <- dfL_filt %>%
-#   mutate(other = if_else(language1 == "ENGLISH", language2, language1)) %>%
-#   pull(other) %>%
-#   unique()
+# iso2pretty_dt <- data.table(iso = targets_iso,
+#                             name = pretty_names)
 # 
-# # 5. See which targets are missing
-# missing <- setdiff(targets, obtained)
+# # --------------------------------------------------------------
+# # 2.  Read the URIEL SYNTACTIC matrix  (≈ 8 000 × 8 000, fast)
+# # --------------------------------------------------------------
+# syn_file <- file.path(uriel_folder, "SYNTACTIC.csv")
+# syn_dt   <- fread(syn_file)       # first column holds row labels
+# setnames(syn_dt, 1, "lang1_iso")
 # 
-# dfL_filt %<>% rename(distance=`L-distance`)
+# # Retain only languages of interest
+# syn_dt <- syn_dt[
+#   lang1_iso %in% targets_iso,
+#   c("lang1_iso", targets_iso), with = FALSE
+# ]
 # 
-# print(missing)
+# # --------------------------------------------------------------
+# # 3.  Long form: one row per unordered ISO pair
+# # --------------------------------------------------------------
+# long_dt <- melt(
+#   syn_dt,
+#   id.vars        = "lang1_iso",
+#   variable.name  = "lang2_iso",
+#   value.name     = "distance",
+#   variable.factor = FALSE
+# )[
+#   # keep only lines where both are in targets and avoid duplicates
+#   lang2_iso %in% targets_iso & lang1_iso < lang2_iso
+# ][
+#   , metric := "syntactic"
+# ]
+# 
+# # --------------------------------------------------------------
+# # 4.  Add pretty language names
+# # --------------------------------------------------------------
+# setkey(iso2pretty_dt, iso)
+# 
+# long_dt <- merge(long_dt, iso2pretty_dt,
+#                  by.x = "lang1_iso", by.y = "iso", all.x = TRUE)
+# setnames(long_dt, "name", "lang1")
+# 
+# long_dt <- merge(long_dt, iso2pretty_dt,
+#                  by.x = "lang2_iso", by.y = "iso", all.x = TRUE)
+# setnames(long_dt, "name", "lang2")
+# 
+# # --------------------------------------------------------------
+# # 5.  Force English onto the left (lang1) and keep only
+# #     English ↔ target rows, ordered by target name
+# # --------------------------------------------------------------
+# wide_dt <- long_dt[metric == "syntactic"]   # only one metric anyway
+# wide_dt[lang2 == "English", c("lang1","lang2") := .(lang2, lang1)]
+# dfL_filt <- wide_dt[
+#   lang1 == "English"
+# ][order(lang2)]
+# 
+# # --------------------------------------------------------------
+# # 6.  Sanity check: did we get all 21 targets?
+# # --------------------------------------------------------------
+# missing <- setdiff(pretty_names[-1], dfL_filt$lang2)  # exclude English
+# if (length(missing)) {
+#   warning("Missing distances for: ", paste(missing, collapse = ", "))
+# } else {
+#   message("All 21 English‑to‑target distances present ✔︎")
+# }
+# 
+# # --------------------------------------------------------------
+# # 7.  Save to CSV  (ready for Figure 1)
+# # --------------------------------------------------------------
+# fwrite(dfL_filt, out_file)
+# 
+# # dfL_filt is also left in memory for interactive use
+# str(dfL_filt)
 
-# write_csv(dfL,"data/ASJP/levenshteinLanguageDistances_processed.csv")
-dfL <- read_csv("data/ASJP/levenshteinLanguageDistances_processed.csv")
-
+dfL_filt <- read_csv("data/lang2vec/processed_syntactic_English_vs_targets.csv")
 ```
 
 
@@ -63,7 +128,6 @@ dfL <- read_csv("data/ASJP/levenshteinLanguageDistances_processed.csv")
 metadata
 ```{r}
 df_UK = read_csv("int_data/UK_processed_health_claims.csv")
-
 ```
 
 responses
@@ -316,9 +380,9 @@ accuracy_lang <- eval_lang_filt %>%
 
 # Prepare Levenshtein distance table: English ↔ other
 distances <- dfL_filt %>%
-  select(language1, language2, distance) %>%
+  select(lang1, lang2, distance) %>%
   mutate(
-    other = if_else(language1 == "ENGLISH", language2, language1)
+    other = if_else(lang2 == "ENGLISH", lang2, lang1)
   ) %>%
   select(language = other, distance) %>%
   distinct() %>%
@@ -415,3 +479,133 @@ ggplot(plot_df, aes(x = distance, y = Accuracy)) +
 ggsave(plot=last_plot(), filename="figures/fig1.jpg",width = 12,height = 8,dpi=300)
 ggsave(plot=last_plot(), filename="figures/fig1.pdf",width = 12,height = 8,dpi=300)
 ```
+
+
+```{r}
+###############################################################################
+## Figure 1  – Mean accuracy (95 % Wilson CI) vs. syntactic distance to English
+###############################################################################
+
+library(data.table)
+library(tidyverse)
+library(binom)
+library(ggrepel)
+library(ggtext)
+
+setDT(df_llm)
+
+## ────────────────────────────────────────────────────────────────
+## 1.  Modal response per claim / language / model
+## ────────────────────────────────────────────────────────────────
+df_modal <- df_llm[, .(
+  modal_response = {
+    tb <- table(response)
+    as.integer(names(tb)[which.max(tb)])
+  },
+  label  = label[1],
+  status = status[1]
+), by = .(claim_id, language, model)]
+
+## ────────────────────────────────────────────────────────────────
+## 2.  Evaluation (Authorised only, drop phi3.5 stub)
+## ────────────────────────────────────────────────────────────────
+evaluation_lang_status <- df_modal[
+  !is.na(modal_response) & !is.na(status) &
+    model != "phi3.5:latest",
+  .(
+    TruePos   = sum(modal_response == 1 & label == 1),
+    FalseNeg  = sum(modal_response == 0 & label == 1)
+  ),
+  by = .(model, language, status)
+]
+
+eval_lang_filt <- evaluation_lang_status[status == "Authorised"]
+
+## ────────────────────────────────────────────────────────────────
+## 3.  Mean accuracy + Wilson CI per language
+## ────────────────────────────────────────────────────────────────
+lang_totals <- eval_lang_filt[ , .(
+  TP = sum(TruePos),
+  FN = sum(FalseNeg)
+), by = language][ , N := TP + FN ][ , Accuracy := TP / N ]
+
+ci_tbl <- binom.confint(lang_totals$TP, lang_totals$N, method = "wilson")
+lang_totals[ , `:=`(CI_low = ci_tbl$lower, CI_high = ci_tbl$upper) ]
+lang_totals[ , language := str_to_title(tolower(language)) ]
+
+## ────────────────────────────────────────────────────────────────
+## 4.  Syntactic‑distance look‑up  (dfL_filt already built earlier)
+## ────────────────────────────────────────────────────────────────
+distances <- dfL_filt %>%        # columns: lang1, lang2, distance_syntactic
+  transmute(language = str_to_title(tolower(lang2)), distance)
+
+plot_df <- left_join(lang_totals, distances, by = "language")
+
+## ────────────────────────────────────────────────────────────────
+## 5.  Per‑model annotation block (mean & slope)
+## ────────────────────────────────────────────────────────────────
+accuracy_model_lang <- eval_lang_filt %>%
+  group_by(model, language) %>%
+  summarise(Accuracy = TruePos / (TruePos + FalseNeg), .groups = "drop") %>%
+  mutate(language = str_to_title(tolower(language))) %>%
+  left_join(distances, by = "language")
+
+model_stats <- accuracy_model_lang %>% 
+  mutate(model_clean = model %>% 
+           str_remove_all("-\\d{4}-\\d{2}-\\d{2}|:latest") %>% 
+           str_replace_all("gemini-2\\.0-flash-lite", "gemini-2-flash")) %>% 
+  group_by(model_clean) %>% 
+  summarise(
+    mean_acc = mean(Accuracy, na.rm = TRUE),
+    slope    = coef(lm(Accuracy ~ distance, data = cur_data()))[2],  # ← cur_data()
+    .groups  = "drop"
+  ) %>% 
+  arrange(slope) %>% 
+  mutate(label = sprintf("**%s**: mean=%.2f; slope=%.2f",
+                         model_clean, mean_acc, slope))
+
+
+label_block <- paste(model_stats$label, collapse = "<br>")
+
+## ────────────────────────────────────────────────────────────────
+## 6.  Plot
+## ────────────────────────────────────────────────────────────────
+xmin <- min(plot_df$distance, na.rm = TRUE)
+ymin <- min(plot_df$Accuracy, na.rm = TRUE)
+
+p <- ggplot(plot_df %>% drop_na(distance), 
+            aes(distance, Accuracy)) +
+  geom_errorbar(aes(ymin = CI_low, ymax = CI_high),
+                width = 0.003, alpha = 0.6, linewidth = 0.6) +
+  geom_point(size = 4,  alpha = 0.6) +
+  geom_text_repel(aes(label = language),
+                  max.overlaps = 20, size = 6) +
+  ## ——— fixed‑position annotation ———
+  geom_richtext(
+    data = tibble(x = 0.60, y = 0.855, label = label_block),
+    aes(x, y, label = label),
+    inherit.aes = FALSE,
+    fill        = NA,
+    label.color = NA,
+    hjust       = 1,
+    vjust       = 0,
+    size        = 6,
+    family      = "mono"
+  ) +
+  ## ——— same fixed viewport as the earlier version ———
+  coord_cartesian(xlim = c(0.37, 0.75),
+                  ylim = c(0.85, 1.00)) +
+  labs(x = "Syntactic distance from English",
+       y = "Mean accuracy (95 % Wilson CI)") +
+  theme_classic(base_size = 20) +
+  theme(axis.text.x     = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+
+ggsave(plot = p, filename = "figures/fig1.jpg",
+       width = 12, height = 8, dpi = 300)
+ggsave(plot = p, filename = "figures/fig1.pdf",
+       width = 12, height = 8, dpi = 300)
+
+```
+

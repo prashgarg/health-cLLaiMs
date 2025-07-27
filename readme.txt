@@ -1,6 +1,6 @@
-README – Replication Package for “Artificial Intelligence health advice accuracy varies across languages and contexts”
+README – Replication Package for “AI health advice accuracy varies across languages and contexts”
 
-This directory contains all code needed to reproduce our analyses. For full package, including data, visit the Zenodo repository (DOI: 10.5281/zenodo.15281282), accessible at https://zenodo.org/records/15281282.
+This directory contains all code and data needed to reproduce our analyses.
 
 Files:
   • project.Rproj  
@@ -9,11 +9,13 @@ Files:
   • 3_evaluate_health_claim_predictions.Rmd  
   • 4_classify_pubhealth_with_openai.ipynb  
   • 5_evaluate_pubhealth_predictions.Rmd  
+  • 6_validation_back_translation.ipynb  
 
 Directories:
-  • data/       – Raw input files  (missing in GitHub version)
-  • int_data/   – Processed and intermediary data  (missing in GitHub version)
-  • figures/    – Final figures used in main text  (missing in GitHub version)
+  • data/       – Raw input files  
+  • int_data/   – Processed and intermediary data  
+  • figures/    – Final figures used in main text  
+  • supplementary_datasets/    – Final supplementary datasets referred to in main text 
 
 Purpose of each file:
 1_translate_health_claims.ipynb  
@@ -26,17 +28,21 @@ Purpose of each file:
 4_classify_pubhealth_with_openai.ipynb  
   • Illustrates how we classify PUBHEALTH dataset claims using the same prompt structure  
 
-Notes on notebooks 1_, 2_ and 4_:  
-  • Provided for illustration only; not intended to be re-run end-to-end.  
+6_validation_back_translation.ipynb  
+  • Conducts the back translation validation exercise. 
+
+Notes on notebooks 1_, 2_, 4_ and 6_:  
+  • Provided for illustration only; not intended to be re-run end-to-end since they incur API charges and require an API key..  
   • All prompts and model settings (including for Ollama open-source models and Gemini) are identical across implementations—only operational code differs.  
   • Initial, intermediary, and final data files have been saved in int_data/ so that analyses can proceed without re-running notebooks 1_, 2_, or 4_.  
 
 3_evaluate_health_claim_predictions.Rmd  
   • Loads processed health-claim classification outputs from int_data/  
-  • Computes accuracy metrics and generates Figure 1  
+  • Computes accuracy metrics and generates Figure 1 
 
 5_evaluate_pubhealth_predictions.Rmd  
   • Loads processed PUBHEALTH classification outputs from int_data/  
   • Computes inaccuracy heatmaps and generates Figure 2  
+  • Conducts additional statistical analysis to generate Supplementary Datasets S1-3 
 
 Each code file contains additional inline documentation describing inputs, outputs, and step-by-step methods. Please open project.Rproj in RStudio to set the working directory and manage package dependencies.

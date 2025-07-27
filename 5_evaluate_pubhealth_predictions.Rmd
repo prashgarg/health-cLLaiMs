@@ -317,3 +317,150 @@ ggsave(plot=last_plot(), filename="figures/fig2.pdf",width = 12,height = 8,dpi=3
 
 ```
 
+# Supplementary Datasets
+
+Dataset S1 — Fixed‑effect logit coefficients
+```{r}
+library(data.table)   # fast tables
+library(fixest)       # feglm()
+library(broom)        # tidy()
+
+## 0 ── make sure the three inputs are data.tables
+setDT(modal_dt)      # already contains: model, claim_id, modal_response, true_label
+setDT(claim_meta2)   # claim_id  |  subject         (from your earlier recode)
+setDT(domains_df)    # claim_id  |  domain          (top‑level URL domains)
+
+## 1 ── add correctness flag
+modal_dt[ , correct := as.integer(modal_response == true_label)]
+
+## 2 ── attach a single canonical topic per claim
+topic_lookup  <- claim_meta2[ , .(topic  = first(subject)), by = claim_id]
+
+## 3 ── attach a primary source domain per claim
+source_lookup <- domains_df[ , .(source = first(domain)) , by = claim_id]
+
+## 4 ── merge look‑ups  →  long format
+modal_long <- modal_dt[
+  topic_lookup , on = "claim_id"][
+  source_lookup, on = "claim_id"]
+
+## 5 ── keep only the categories that appear in Figure 2
+keep_topics  <- c("abortion","health","politics","news","covid-19")
+keep_sources <- c("nature.com","foxnews.com","nytimes.com",
+                  "youtube.com","cdc.gov")
+
+modal_long_trim <- copy(modal_long)[
+  , topic  := fcase(topic  %in% keep_topics , topic , default = "Other")
+][
+  , source := fcase(source %in% keep_sources, source, default = "Other")
+]
+
+## drop rows that still have missing critical fields
+modal_long_trim <- na.omit(
+  modal_long_trim,
+  cols = c("correct","model","topic","source")
+)
+
+## 6 ── claim‑level fixed‑effect logit (clustered SEs)
+fe_fit <- feglm(
+  correct ~ model + topic + source | claim_id,
+  data    = modal_long_trim,
+  family  = binomial("logit")
+)
+
+table_S1 <- broom::tidy(
+  fe_fit,
+  conf.int   = TRUE,
+  conf.level = 0.95,
+  cluster    = "claim_id"
+)
+
+## 7 ── save to Supplementary Dataset S1
+dir.create("supplementary_datasets", showWarnings = FALSE)
+data.table::fwrite(
+  table_S1,
+  file = "supplementary_datasets/dataset_S1.csv"
+)
+
+```
+
+Dataset S2 — Pairwise McNemar tests (BH‑adjusted)
+```{r}
+## ── packages ───────────────────────────────────────────
+library(data.table)
+library(DescTools)    # mcnemar.test
+library(purrr)        # map_dfr()
+
+## ── wide 0/1 correctness matrix per claim ─────────────
+wide_mat <- dcast(
+  modal_long_trim,
+  claim_id ~ model,
+  value.var = "correct"
+)
+
+models <- setdiff(names(wide_mat), "claim_id")
+
+## McNemar on every unordered pair
+run_mcnemar <- function(a, b) {
+  tab <- table(wide_mat[[a]], wide_mat[[b]])
+  out <- mcnemar.test(tab, correct = TRUE)
+  data.frame(model_A  = a,
+             model_B  = b,
+             statistic = out$statistic,
+             p_value   = out$p.value)
+}
+
+S2 <- map_dfr(combn(models, 2, simplify = FALSE),
+              \(m) run_mcnemar(m[1], m[2]))
+
+S2$p_adj <- p.adjust(S2$p_value, method = "BH")
+data.table::setorder(S2, p_adj)
+
+data.table::fwrite(S2, "supplementary_datasets/dataset_S2.csv")
+
+```
+
+Dataset S3 — Readability (F‑K grade) mixed‑logit
+```{r}
+## ── packages ───────────────────────────────────────────
+library(data.table)
+library(quanteda.textstats)   # textstat_readability()
+library(fixest)               # feglm()
+library(broom)                # tidy()
+
+## ── 0.  F‑K grade per claim  ───────────────────────────
+setDT(df)   # df already has claim_id + claim text
+df[ , fk_grade :=
+      textstat_readability(claim,
+                           measure = "Flesch.Kincaid")$Flesch.Kincaid ]
+
+## ── 1.  merge into trimmed analysis table ──────────────
+modal_enh <- modal_long_trim[         # produced in Dataset S1 code
+  df[ , .(claim_id, fk_grade)],
+  on = "claim_id"
+]
+
+## ── 2.  logit without claim FE (clustered by claim) ───
+fe_noclaim <- feglm(
+  correct ~ model + topic + source + fk_grade,
+  data    = modal_enh,
+  family  = binomial("logit"),
+  cluster = "claim_id"         # robust SEs
+)
+
+## ── 3.  tidy + save as Dataset S3 ──────────────────────
+table_S3 <- broom::tidy(
+  fe_noclaim,
+  conf.int   = TRUE,
+  conf.level = 0.95,
+  cluster    = "claim_id"
+)
+
+data.table::fwrite(
+  table_S3,
+  file = "supplementary_datasets/dataset_S3.csv"
+)
+
+
+```
+
